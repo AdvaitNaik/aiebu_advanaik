@@ -319,7 +319,7 @@ void
 control::
 create_result_file(const std::unordered_map<uint32_t, std::vector<uint32_t>>& result_buffers, 
     const std::unordered_map<uint32_t, std::vector<uint32_t>>& mem_buffers, 
-    const std::string& output_file) const
+    const std::string& output_file, uint32_t cmd_index, uint32_t num_cmds) const
 {
     uint32_t uC_index = 0;  // uC_index 0 for begin and end probes
     std::vector<std::pair<std::shared_ptr<dtrace::action::action>, uint32_t>> actions;
@@ -353,13 +353,21 @@ create_result_file(const std::unordered_map<uint32_t, std::vector<uint32_t>>& re
     }
 
     // Create python script
-    std::ofstream output(output_file);
+    std::ofstream output(output_file, std::ios::app);
     if (!output)
         DTRACE_ERROR("DTRACE_CONTROL_RESULT_FILE_NOT_FOUND", "result file: " << output_file);
         
-    output << "#! /usr/bin/env python3\n";
-    output << "import sys\n\n";
-    output << "if __name__ == '__main__':\n";
+    if (cmd_index == 0) 
+    {
+        output << "#! /usr/bin/env python3\n";
+        output << "import sys\n\n";
+        output << "if __name__ == '__main__':\n";
+    }
+
+    // Print command separator if more than one command
+    if (num_cmds > 1)
+        output << "  " << "print(\"# Command " << (cmd_index + 1) << "\")" << "\n";
+
     for (const auto& item : actions)
     {
         const auto& action = item.first;
@@ -379,7 +387,11 @@ create_result_file(const std::unordered_map<uint32_t, std::vector<uint32_t>>& re
             );
         }
     }
-    output << "  " << "sys.exit(0)\n";
+
+    // Print sys.exit(0) for the last command
+    if (cmd_index == num_cmds - 1) 
+        output << "  " << "sys.exit(0)\n";
+    
     output.close();
 }
 

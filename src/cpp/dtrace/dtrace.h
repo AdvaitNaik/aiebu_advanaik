@@ -87,6 +87,21 @@ void
 populate_dtrace_buffer(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma);
 
 /*!
+ * populate_dtrace_buffer_cmd() - Creates a dynamic tracing buffers.
+ *
+ * @control_buffer:         Address for control buffer and memory buffer containing 
+ *                          probe and action details and mem action details for multiple uC.
+ * @dtrace_buffer_dma:      Physical address of the buffer, used to patch mem action host address
+ * @num_cmds:               Number of commands for which the dtrace buffer is to be populated.
+ *
+ * This function initializes and allocates dynamic tracing buffers for each uC index and command. 
+ * Each element in the control buffer represents a probe or its respective action.
+ */
+DTRACE_EXPORT
+void 
+populate_dtrace_buffer_cmd(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma, uint32_t num_cmds);
+
+/*!
  * get_dtrace_result_file() - Creates a result file for dynamic tracing.
  *
  * @result_file:  Output file where the readable result will be written.

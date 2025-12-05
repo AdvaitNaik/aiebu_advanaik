@@ -48,7 +48,7 @@ public:
     void patch_control_buffer(std::unordered_map<uint32_t, uint64_t>& mem_host_addr_map);
     void create_result_file(const std::unordered_map<uint32_t, std::vector<uint32_t>>& result_buffers, 
         const std::unordered_map<uint32_t, std::vector<uint32_t>>& mem_buffers, 
-        const std::string& output_file) const;
+        const std::string& output_file, uint32_t cmd_index, uint32_t num_cmds) const;
     std::vector<uint32_t> create_control_buffer(uint32_t uC) const;
     std::vector<uint32_t> create_mem_buffer(uint32_t uC) const;
 };

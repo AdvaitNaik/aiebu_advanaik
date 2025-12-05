@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <iostream>
 
 extern "C" {
 
@@ -37,6 +38,13 @@ struct dtrace_buffer_info {
 // multiple uC dtrace
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 static std::unordered_map<uint32_t, dtrace_buffer_info> g_dtrace_buffer_info_map;
+
+// multi command dtrace
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static uint32_t g_num_cmds = 1;
+// NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
+static std::vector<std::unordered_map<uint32_t, dtrace_buffer_info>> g_dtrace_buffer_info_map_cmd;
+
 
 //---------------------------multiple uC dtrace---------------------------
 uint32_t 
@@ -134,7 +142,7 @@ populate_dtrace_buffer(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma)
             for (const auto& uC_index : g_control->m_control_uC_indices)
             {
                 // Get the dtrace_buffer_info for the given uC_index
-                dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map[uC_index];
+                dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map.at(uC_index);
 
                 uC_buffer_dma_addr += l_dtrace_buffer_info.control_buffer.size() * sizeof(uint32_t);
                 if (!l_dtrace_buffer_info.mem_buffer.empty()) {
@@ -161,7 +169,7 @@ populate_dtrace_buffer(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma)
         for (const auto& uC_index : g_control->m_control_uC_indices)
         {    
             // Get the dtrace_buffer_info for the given uC_index
-            dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map[uC_index];
+            dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map.at(uC_index);
 
             // Buffer address for the current uC index
             l_dtrace_buffer_info.buffer_addr = uC_buffer_addr;
@@ -187,6 +195,119 @@ populate_dtrace_buffer(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma)
                 buffer.size() * sizeof(uint32_t)
             );
         }
+
+        // resize dtrace buffer info map for commands
+        g_dtrace_buffer_info_map_cmd.clear();
+        g_dtrace_buffer_info_map_cmd.resize(g_num_cmds);
+        // Store the dtrace buffer info map for this command
+        g_dtrace_buffer_info_map_cmd.front() = std::move(g_dtrace_buffer_info_map);
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << e.what();
+    }
+}
+
+void 
+populate_dtrace_buffer_cmd(uint32_t* dtrace_buffer, uint64_t dtrace_buffer_dma, uint32_t num_cmds)
+{
+    try
+    {
+        // resize dtrace buffer info map for commands
+        g_dtrace_buffer_info_map_cmd.clear();
+        g_dtrace_buffer_info_map_cmd.resize(num_cmds);
+        g_num_cmds = num_cmds;
+
+        // calculate the total size of complete dtrace buffer
+        uint64_t buffer_size = 0;
+        for (const auto& uC_index : g_control->m_control_uC_indices)
+        {
+            dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map.at(uC_index);
+            buffer_size += 
+                (l_dtrace_buffer_info.control_buffer.size() + l_dtrace_buffer_info.mem_buffer.size()) * sizeof(uint32_t);
+        }
+
+        uint32_t* uC_buffer_addr = dtrace_buffer;
+        // Iterate over each command to populate the dtrace buffer
+        for (uint32_t cmd_index = 0; cmd_index < num_cmds; cmd_index++)
+        {
+            // Calculate the base DMA address for this command's buffer
+            uint64_t uC_buffer_dma_addr = dtrace_buffer_dma;
+            if (cmd_index != 0)
+                uC_buffer_dma_addr = buffer_size;
+            
+            // Initialize the memory host address map for this command
+            std::unordered_map<uint32_t, uint64_t> mem_host_addr_map;
+
+            // Update control buffer with mem host addr if mem buffer is present
+            if (g_control->m_mem_action_present) {
+                for (const auto& uC_index : g_control->m_control_uC_indices)
+                {
+                    // Get the dtrace_buffer_info for the given uC_index
+                    dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map.at(uC_index);
+
+                    if (cmd_index != 0)
+                    {
+                        mem_host_addr_map[uC_index] = uC_buffer_dma_addr;
+                        l_dtrace_buffer_info.buffer_dma_addr += uC_buffer_dma_addr;
+                    }
+                    else
+                    {
+                        uC_buffer_dma_addr += l_dtrace_buffer_info.control_buffer.size() * sizeof(uint32_t);
+                        if (!l_dtrace_buffer_info.mem_buffer.empty()) {
+                            mem_host_addr_map[uC_index] = uC_buffer_dma_addr;
+
+                            uC_buffer_dma_addr += l_dtrace_buffer_info.mem_buffer.size() * sizeof(uint32_t);
+                        }
+                        l_dtrace_buffer_info.buffer_dma_addr = uC_buffer_dma_addr;
+                    }
+                }
+                
+                // Patch the control buffer with the calculated memory host addresses
+                g_control->patch_control_buffer(mem_host_addr_map);
+
+                // Update control buffer and memory buffer in the global structure after patching
+                for (auto& [uC_index, l_dtrace_buffer_info] : g_dtrace_buffer_info_map)
+                {
+                    l_dtrace_buffer_info.control_buffer = g_control->create_control_buffer(uC_index);
+                    l_dtrace_buffer_info.mem_buffer = g_control->create_mem_buffer(uC_index);
+                }
+            }
+
+            // Control buffer and memory buffer for each uC
+            for (const auto& uC_index : g_control->m_control_uC_indices)
+            {
+                // Get the dtrace_buffer_info for the given uC_index
+                dtrace_buffer_info& l_dtrace_buffer_info = g_dtrace_buffer_info_map.at(uC_index);
+                
+                // Buffer address for the current uC index
+                l_dtrace_buffer_info.buffer_addr = uC_buffer_addr;
+                uC_buffer_addr += 
+                    l_dtrace_buffer_info.control_buffer.size() + l_dtrace_buffer_info.mem_buffer.size();
+
+                std::vector<uint32_t> buffer;
+                buffer.insert(
+                    buffer.end(), 
+                    l_dtrace_buffer_info.control_buffer.begin(), 
+                    l_dtrace_buffer_info.control_buffer.end()
+                );
+                if (!l_dtrace_buffer_info.mem_buffer.empty())
+                {
+                    buffer.insert(
+                        buffer.end(), 
+                        l_dtrace_buffer_info.mem_buffer.begin(), 
+                        l_dtrace_buffer_info.mem_buffer.end()
+                    );
+                }
+                std::memcpy(
+                    l_dtrace_buffer_info.buffer_addr, buffer.data(), 
+                    buffer.size() * sizeof(uint32_t)
+                );
+            }
+
+            // Store the dtrace buffer info map for this command
+            g_dtrace_buffer_info_map_cmd[cmd_index] = g_dtrace_buffer_info_map;
+        }
     }
     catch (const std::exception& e)
     {
@@ -203,8 +324,12 @@ get_dtrace_result_file(const char* result_file)
         std::unordered_map<uint32_t, std::vector<uint32_t>> result_buffers;
         std::unordered_map<uint32_t, std::vector<uint32_t>> mem_buffers;
 
+        for (uint32_t cmd_index = 0; cmd_index < g_num_cmds; cmd_index++) 
+        {
+        // Get the dtrace buffer info map for this command
+        const auto& dtrace_buffer_info_map = g_dtrace_buffer_info_map_cmd.at(cmd_index);
         // Iterate over all result buffer and memory buffer for each uC in global map
-        for (const auto& [uC_index, l_dtrace_buffer_info] : g_dtrace_buffer_info_map)
+        for (const auto& [uC_index, l_dtrace_buffer_info] : dtrace_buffer_info_map)
         {
             std::vector<uint32_t> buffer(
                 l_dtrace_buffer_info.control_buffer.size() + l_dtrace_buffer_info.mem_buffer.size()
@@ -232,7 +357,10 @@ get_dtrace_result_file(const char* result_file)
             mem_buffers[uC_index] = std::move(mem_buffer);
         }
         // Create the result file
-        g_control->create_result_file(result_buffers, mem_buffers, result_file);
+        g_control->create_result_file(
+            result_buffers, mem_buffers, result_file, cmd_index, g_num_cmds
+        );
+        }
     }
     catch (const std::exception& e)
     {
